@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  equivalencia-app:
+    build: .
+    # Si preferís usar la imagen publicada en GitHub Container Registry en vez de buildear,
+    # comentá "build: ." y descomentá la línea de "image" de abajo.
+    # image: ghcr.io/TU_USUARIO/equivalencia-app:latest
+    container_name: equivalencia-app
+    restart: unless-stopped
+    ports:
+      - "8020:8000"
+    volumes:
+      - equivalencia-data:/app/data
+
+volumes:
+  equivalencia-data:
