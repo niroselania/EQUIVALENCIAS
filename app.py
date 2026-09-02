@@ -56,7 +56,9 @@ def _read_grande(path):
 
 
 def _read_pedido(path):
-    ext = _ext(path)
+    # path puede ser un string (ruta en disco) o un file-like (BytesIO) con .name seteado
+    filename = getattr(path, "name", path)
+    ext = _ext(filename)
     engine = "xlrd" if ext == ".xls" else "openpyxl"
     df = pd.read_excel(path, engine=engine)
     return df
