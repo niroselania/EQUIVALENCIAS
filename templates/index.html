@@ -117,7 +117,7 @@
       <div class="card">
         <h2>2. Planilla de pedido</h2>
         <div class="desc">La planilla del proveedor a resolver (columna A = SKU, columna B = Color).</div>
-        <label for="pedido">Archivo .xlsx</label>
+        <label for="pedido">Archivo .xlsx (debe tener columnas EQUIVALENCIA, SKU, COLOR y TALLE)</label>
         <input type="file" id="pedido" name="pedido" accept=".xlsx" required>
       </div>
 
@@ -125,9 +125,9 @@
     </form>
 
     <div class="footer-note">
-      El resultado es tu misma planilla, con el mismo formato, agregando una sola columna nueva
-      "Código de Barra" justo al lado del SKU (si hay varios talles con distinto código, se listan
-      todos separados por coma con el talle entre paréntesis).
+      Busca por SKU + Color + Talle exacto y completa la columna "EQUIVALENCIA" que ya viene
+      en tu planilla (pisa lo que haya ahí, ej. las XXXXX) con el código de barra encontrado.
+      El resto de la planilla queda intacta.
     </div>
   </div>
 </body>

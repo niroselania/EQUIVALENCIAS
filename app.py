@@ -1,12 +1,10 @@
 import io
 import os
 from collections import defaultdict
-from copy import copy
 from datetime import datetime
 
 import pandas as pd
 import openpyxl
-from openpyxl.utils import get_column_letter, column_index_from_string
 from flask import Flask, request, render_template, send_file, flash, redirect, url_for
 from werkzeug.utils import secure_filename
 
@@ -21,7 +19,6 @@ GRANDE_CACHE_PATH_XLSX = os.path.join(DATA_DIR, "planilla_grande.xlsx")
 GRANDE_CACHE_META = os.path.join(DATA_DIR, "planilla_grande.meta")
 
 ALLOWED_EXT = {".xls", ".xlsx"}
-BARCODE_HEADER = "Código de Barra"
 
 
 def _ext(filename):
@@ -59,82 +56,100 @@ def _read_grande(path):
     return lookup
 
 
-def _buscar_codigo(lookup, sku, color):
+def _dedupe_codigos(codigos):
+    """A veces la planilla grande tiene el mismo código de barra duplicado con
+    distinto padding de ceros a la izquierda (ej. '00191743848643' y '191743848643').
+    Los trata como el mismo código y se queda con la representación más corta."""
+    vistos = {}
+    for c in codigos:
+        try:
+            clave = int(c)
+        except (TypeError, ValueError):
+            clave = c
+        if clave not in vistos or len(c) < len(vistos[clave]):
+            vistos[clave] = c
+    return list(vistos.values())
+
+
+def _buscar_codigo(lookup, sku, color, talle):
+    """Busca el código de barra exacto para SKU + Color + Talle."""
     if sku is None or color is None or str(sku).strip() == "" or str(color).strip() == "":
-        return "", 0
+        return ""
     sku_str = str(sku).strip()
     if sku_str.endswith(".0"):
         sku_str = sku_str[:-2]
     color_str = str(color).strip()
+    talle_str = "" if talle is None else str(talle).strip()
+
     key = f"{sku_str} {color_str}"
     candidatos = lookup.get(key, [])
-    if not candidatos:
-        return "SIN COINCIDENCIA", 0
-    if len(candidatos) == 1:
-        return candidatos[0][0], 1
-    texto = ", ".join(f"{codigo} ({talle})" if talle else codigo for codigo, talle in candidatos)
-    return texto, len(candidatos)
+    coincidencias = [
+        codigo for codigo, t in candidatos if t.strip().upper() == talle_str.upper()
+    ]
+    coincidencias = _dedupe_codigos(coincidencias)
+
+    if not coincidencias:
+        return "SIN COINCIDENCIA"
+    if len(coincidencias) == 1:
+        return coincidencias[0]
+    # Conflicto real de datos en la planilla grande: mismo SKU+Color+Talle con más
+    # de un código de barra distinto. Se muestran todos para que se revise a mano.
+    return " / ".join(coincidencias)
 
 
-def _copy_cell_style(src, dst):
-    dst.font = copy(src.font)
-    dst.border = copy(src.border)
-    dst.fill = copy(src.fill)
-    dst.alignment = copy(src.alignment)
-    dst.number_format = src.number_format
-    dst.protection = copy(src.protection)
+def _buscar_columna(headers, *nombres_posibles):
+    for nombre in nombres_posibles:
+        if nombre in headers:
+            return headers[nombre]
+    return None
 
 
 def _procesar(grande_path, pedido_path):
-    """Abre el excel de pedido tal cual fue subido (misma planilla, mismo estilo) e
-    inserta una columna nueva con el código de barra justo al lado de la columna SKU
-    (columna A), corriendo el resto de las columnas una posición a la derecha.
-    """
+    """Abre el excel de pedido tal cual fue subido (mismo formato, mismo estilo) y
+    completa la columna EQUIVALENCIA que ya viene en la planilla, buscando el
+    código de barra exacto por SKU + Color + Talle. No inserta columnas nuevas ni
+    toca el resto de la planilla."""
     lookup = _read_grande(grande_path)
 
     wb = openpyxl.load_workbook(pedido_path)
     ws = wb.worksheets[0]
 
-    if ws.max_column < 2:
-        raise ValueError("La planilla de pedido necesita al menos dos columnas (SKU y Color).")
+    headers = {}
+    for c in range(1, ws.max_column + 1):
+        v = ws.cell(row=1, column=c).value
+        if v is not None:
+            headers[str(v).strip().upper()] = c
 
-    max_row = ws.max_row
+    col_equiv = _buscar_columna(headers, "EQUIVALENCIA")
+    col_sku = _buscar_columna(headers, "SKU")
+    col_color = _buscar_columna(headers, "COLOR")
+    col_talle = _buscar_columna(headers, "TALLE")
 
-    # 1) Calcular los resultados ANTES de tocar la estructura de la hoja
-    #    (columna A = SKU, columna B = Color, tal cual vienen en el archivo original)
-    resultados = []
-    for row in range(2, max_row + 1):
-        sku = ws.cell(row=row, column=1).value
-        color = ws.cell(row=row, column=2).value
-        texto, _cantidad = _buscar_codigo(lookup, sku, color)
-        resultados.append(texto)
+    faltantes = [
+        nombre
+        for nombre, col in [
+            ("EQUIVALENCIA", col_equiv),
+            ("SKU", col_sku),
+            ("COLOR", col_color),
+            ("TALLE", col_talle),
+        ]
+        if col is None
+    ]
+    if faltantes:
+        raise ValueError(
+            "No encontré la columna "
+            + ", ".join(faltantes)
+            + " en la fila 1 de la planilla. Los encabezados deben llamarse exactamente así."
+        )
 
-    # 2) Guardar anchos de columnas originales para reubicarlos después de insertar
-    anchos_originales = {}
-    for col_letter, dim in ws.column_dimensions.items():
-        if dim.width:
-            anchos_originales[column_index_from_string(col_letter)] = dim.width
-
-    # 3) Insertar la columna nueva justo después del SKU (columna A -> nueva columna B)
-    ws.insert_cols(2)
-
-    # Reubicar anchos: todo lo que estaba desde la columna B en adelante corrió +1
-    for idx, width in sorted(anchos_originales.items(), reverse=True):
-        if idx == 1:
+    for row in range(2, ws.max_row + 1):
+        sku = ws.cell(row=row, column=col_sku).value
+        color = ws.cell(row=row, column=col_color).value
+        talle = ws.cell(row=row, column=col_talle).value
+        if sku is None and color is None:
             continue
-        ws.column_dimensions[get_column_letter(idx + 1)].width = width
-    # Ancho razonable para la columna nueva de código de barra
-    ws.column_dimensions[get_column_letter(2)].width = 18
-
-    # 4) Encabezado de la columna nueva, con el mismo estilo que el resto del encabezado
-    header_cell = ws.cell(row=1, column=2, value=BARCODE_HEADER)
-    _copy_cell_style(ws.cell(row=1, column=3), header_cell)
-
-    # 5) Cargar los valores calculados, con el mismo estilo de celda que el resto de la fila
-    for i, texto in enumerate(resultados):
-        row = i + 2
-        cell = ws.cell(row=row, column=2, value=texto)
-        _copy_cell_style(ws.cell(row=row, column=3), cell)
+        resultado = _buscar_codigo(lookup, sku, color, talle)
+        cell = ws.cell(row=row, column=col_equiv, value=resultado)
         cell.number_format = "@"  # texto plano, para no perder ceros a la izquierda
 
     output = io.BytesIO()
