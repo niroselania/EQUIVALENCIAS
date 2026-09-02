@@ -1,9 +1,12 @@
 import io
 import os
 from collections import defaultdict
+from copy import copy
 from datetime import datetime
 
 import pandas as pd
+import openpyxl
+from openpyxl.utils import get_column_letter, column_index_from_string
 from flask import Flask, request, render_template, send_file, flash, redirect, url_for
 from werkzeug.utils import secure_filename
 
@@ -18,6 +21,7 @@ GRANDE_CACHE_PATH_XLSX = os.path.join(DATA_DIR, "planilla_grande.xlsx")
 GRANDE_CACHE_META = os.path.join(DATA_DIR, "planilla_grande.meta")
 
 ALLOWED_EXT = {".xls", ".xlsx"}
+BARCODE_HEADER = "Código de Barra"
 
 
 def _ext(filename):
@@ -55,56 +59,88 @@ def _read_grande(path):
     return lookup
 
 
-def _read_pedido(path):
-    # path puede ser un string (ruta en disco) o un file-like (BytesIO) con .name seteado
-    filename = getattr(path, "name", path)
-    ext = _ext(filename)
-    engine = "xlrd" if ext == ".xls" else "openpyxl"
-    df = pd.read_excel(path, engine=engine)
-    return df
+def _buscar_codigo(lookup, sku, color):
+    if sku is None or color is None or str(sku).strip() == "" or str(color).strip() == "":
+        return "", 0
+    sku_str = str(sku).strip()
+    if sku_str.endswith(".0"):
+        sku_str = sku_str[:-2]
+    color_str = str(color).strip()
+    key = f"{sku_str} {color_str}"
+    candidatos = lookup.get(key, [])
+    if not candidatos:
+        return "SIN COINCIDENCIA", 0
+    if len(candidatos) == 1:
+        return candidatos[0][0], 1
+    texto = ", ".join(f"{codigo} ({talle})" if talle else codigo for codigo, talle in candidatos)
+    return texto, len(candidatos)
+
+
+def _copy_cell_style(src, dst):
+    dst.font = copy(src.font)
+    dst.border = copy(src.border)
+    dst.fill = copy(src.fill)
+    dst.alignment = copy(src.alignment)
+    dst.number_format = src.number_format
+    dst.protection = copy(src.protection)
 
 
 def _procesar(grande_path, pedido_path):
+    """Abre el excel de pedido tal cual fue subido (misma planilla, mismo estilo) e
+    inserta una columna nueva con el código de barra justo al lado de la columna SKU
+    (columna A), corriendo el resto de las columnas una posición a la derecha.
+    """
     lookup = _read_grande(grande_path)
-    pedido = _read_pedido(pedido_path)
 
-    if pedido.shape[1] < 2:
+    wb = openpyxl.load_workbook(pedido_path)
+    ws = wb.worksheets[0]
+
+    if ws.max_column < 2:
         raise ValueError("La planilla de pedido necesita al menos dos columnas (SKU y Color).")
 
-    codigos_col = []
-    cantidad_col = []
-    for _, row in pedido.iterrows():
-        sku = row.iloc[0]
-        color = row.iloc[1]
-        if pd.isna(sku) or pd.isna(color):
-            codigos_col.append("")
-            cantidad_col.append(0)
-            continue
-        sku_str = str(sku).strip()
-        # Si el SKU vino como número con .0 (float), lo normalizamos a entero
-        try:
-            if sku_str.endswith(".0"):
-                sku_str = sku_str[:-2]
-        except Exception:
-            pass
-        color_str = str(color).strip()
-        key = f"{sku_str} {color_str}"
-        candidatos = lookup.get(key, [])
-        cantidad_col.append(len(candidatos))
-        if not candidatos:
-            codigos_col.append("SIN COINCIDENCIA")
-        elif len(candidatos) == 1:
-            codigos_col.append(candidatos[0][0])
-        else:
-            texto = ", ".join(
-                f"{codigo} ({talle})" if talle else codigo for codigo, talle in candidatos
-            )
-            codigos_col.append(texto)
+    max_row = ws.max_row
 
-    resultado = pedido.copy()
-    resultado["Código(s) de Barra"] = codigos_col
-    resultado["Cantidad de Coincidencias"] = cantidad_col
-    return resultado
+    # 1) Calcular los resultados ANTES de tocar la estructura de la hoja
+    #    (columna A = SKU, columna B = Color, tal cual vienen en el archivo original)
+    resultados = []
+    for row in range(2, max_row + 1):
+        sku = ws.cell(row=row, column=1).value
+        color = ws.cell(row=row, column=2).value
+        texto, _cantidad = _buscar_codigo(lookup, sku, color)
+        resultados.append(texto)
+
+    # 2) Guardar anchos de columnas originales para reubicarlos después de insertar
+    anchos_originales = {}
+    for col_letter, dim in ws.column_dimensions.items():
+        if dim.width:
+            anchos_originales[column_index_from_string(col_letter)] = dim.width
+
+    # 3) Insertar la columna nueva justo después del SKU (columna A -> nueva columna B)
+    ws.insert_cols(2)
+
+    # Reubicar anchos: todo lo que estaba desde la columna B en adelante corrió +1
+    for idx, width in sorted(anchos_originales.items(), reverse=True):
+        if idx == 1:
+            continue
+        ws.column_dimensions[get_column_letter(idx + 1)].width = width
+    # Ancho razonable para la columna nueva de código de barra
+    ws.column_dimensions[get_column_letter(2)].width = 18
+
+    # 4) Encabezado de la columna nueva, con el mismo estilo que el resto del encabezado
+    header_cell = ws.cell(row=1, column=2, value=BARCODE_HEADER)
+    _copy_cell_style(ws.cell(row=1, column=3), header_cell)
+
+    # 5) Cargar los valores calculados, con el mismo estilo de celda que el resto de la fila
+    for i, texto in enumerate(resultados):
+        row = i + 2
+        cell = ws.cell(row=row, column=2, value=texto)
+        _copy_cell_style(ws.cell(row=row, column=3), cell)
+        cell.number_format = "@"  # texto plano, para no perder ceros a la izquierda
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
 
 
 @app.route("/", methods=["GET"])
@@ -126,8 +162,8 @@ def procesar():
         flash("Subí la planilla de pedido (la que hay que resolver).")
         return redirect(url_for("index"))
 
-    if _ext(pedido_file.filename) not in ALLOWED_EXT:
-        flash("La planilla de pedido debe ser .xls o .xlsx")
+    if _ext(pedido_file.filename) != ".xlsx":
+        flash("La planilla de pedido debe ser .xlsx (para poder mantener el mismo formato/estilo al insertar la columna).")
         return redirect(url_for("index"))
 
     # Resolver planilla grande: la subida ahora, o la que quedó cacheada
@@ -157,17 +193,12 @@ def procesar():
     pedido_bytes.name = pedido_file.filename
 
     try:
-        resultado = _procesar(grande_path, pedido_bytes)
+        output = _procesar(grande_path, pedido_bytes)
     except Exception as e:
         flash(f"Error procesando los archivos: {e}")
         return redirect(url_for("index"))
 
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        resultado.to_excel(writer, index=False, sheet_name="Equivalencia")
-    output.seek(0)
-
-    nombre_salida = f"Equivalencia_{secure_filename(os.path.splitext(pedido_file.filename)[0])}.xlsx"
+    nombre_salida = f"{secure_filename(os.path.splitext(pedido_file.filename)[0])} - con equivalencia.xlsx"
     return send_file(
         output,
         as_attachment=True,
@@ -183,3 +214,4 @@ def health():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+

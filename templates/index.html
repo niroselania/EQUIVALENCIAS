@@ -117,15 +117,17 @@
       <div class="card">
         <h2>2. Planilla de pedido</h2>
         <div class="desc">La planilla del proveedor a resolver (columna A = SKU, columna B = Color).</div>
-        <label for="pedido">Archivo .xls / .xlsx</label>
-        <input type="file" id="pedido" name="pedido" accept=".xls,.xlsx" required>
+        <label for="pedido">Archivo .xlsx</label>
+        <input type="file" id="pedido" name="pedido" accept=".xlsx" required>
       </div>
 
       <button type="submit">Procesar y descargar resultado</button>
     </form>
 
     <div class="footer-note">
-      El resultado agrega dos columnas al final: "Código(s) de Barra" (uno o varios candidatos según Talle) y "Cantidad de Coincidencias".
+      El resultado es tu misma planilla, con el mismo formato, agregando una sola columna nueva
+      "Código de Barra" justo al lado del SKU (si hay varios talles con distinto código, se listan
+      todos separados por coma con el talle entre paréntesis).
     </div>
   </div>
 </body>
