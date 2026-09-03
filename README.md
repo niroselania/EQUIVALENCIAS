@@ -26,6 +26,15 @@ para cada línea del pedido, el/los código(s) de barra correspondientes.
 4. Tocá "Procesar y descargar resultado". Se descarga un Excel igual al de pedido, con dos
    columnas nuevas al final: `Código(s) de Barra` y `Cantidad de Coincidencias`.
 
+## Generar etiqueta suelta (reimpresión)
+
+Desde el botón "Generar etiqueta" en la página principal (o entrando directo a `/etiqueta`)
+podés crear una etiqueta individual de **4 x 2 cm** ingresando a mano: descripción, color,
+talle y código de barra. Genera un PNG a 300 DPI con el tamaño físico exacto de la etiqueta
+(queda en los metadatos del archivo), con el código de barra real generado a partir del
+número (EAN-13, UPC-A o Code128 según el largo del código). Al imprimir el PNG a "tamaño
+real" / 100% (sin ajustar a página) sale del tamaño correcto.
+
 ## Deploy en Portainer (Docker Compose)
 
 1. Subí este repo a GitHub.

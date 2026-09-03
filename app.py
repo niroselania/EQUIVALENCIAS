@@ -1,10 +1,14 @@
 import io
 import os
+import textwrap
 from collections import defaultdict
 from datetime import datetime
 
 import pandas as pd
 import openpyxl
+import barcode as barcode_lib
+from barcode.writer import ImageWriter
+from PIL import Image, ImageDraw, ImageFont
 from flask import Flask, request, render_template, send_file, flash, redirect, url_for
 from werkzeug.utils import secure_filename
 
@@ -19,6 +23,10 @@ GRANDE_CACHE_PATH_XLSX = os.path.join(DATA_DIR, "planilla_grande.xlsx")
 GRANDE_CACHE_META = os.path.join(DATA_DIR, "planilla_grande.meta")
 
 ALLOWED_EXT = {".xls", ".xlsx"}
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_BOLD = os.path.join(BASE_DIR, "fonts", "DejaVuSans-Bold.ttf")
+FONT_REGULAR = os.path.join(BASE_DIR, "fonts", "DejaVuSans.ttf")
 
 
 def _ext(filename):
@@ -156,6 +164,153 @@ def _procesar(grande_path, pedido_path):
     wb.save(output)
     output.seek(0)
     return output
+
+
+def _generar_imagen_codigo_barra(codigo, module_height_mm=9.0, module_width_mm=0.28):
+    """Genera la imagen del código de barra (EAN13 / UPC-A / Code128 según el largo)
+    sin el texto legible debajo (eso lo dibujamos aparte con nuestra propia fuente)."""
+    codigo = str(codigo).strip()
+    solo_digitos = codigo.isdigit()
+    if solo_digitos and len(codigo) == 13:
+        clase = "ean13"
+    elif solo_digitos and len(codigo) == 12:
+        clase = "upca"
+    elif solo_digitos and len(codigo) == 8:
+        clase = "ean8"
+    else:
+        clase = "code128"
+
+    BarcodeClass = barcode_lib.get_barcode_class(clase)
+    bc = BarcodeClass(codigo, writer=ImageWriter())
+    buf = io.BytesIO()
+    bc.write(
+        buf,
+        options={
+            "write_text": False,
+            "quiet_zone": 1.0,
+            "module_height": module_height_mm,
+            "module_width": module_width_mm,
+        },
+    )
+    buf.seek(0)
+    return Image.open(buf).convert("L")
+
+
+def _texto_ajustado(draw, texto, font, max_width_px, max_lineas=2):
+    """Envuelve el texto para que entre en max_width_px, cortando con '…' si no entra."""
+    palabras = texto.split()
+    lineas = []
+    actual = ""
+    for palabra in palabras:
+        prueba = (actual + " " + palabra).strip()
+        ancho = draw.textbbox((0, 0), prueba, font=font)[2]
+        if ancho <= max_width_px or not actual:
+            actual = prueba
+        else:
+            lineas.append(actual)
+            actual = palabra
+            if len(lineas) == max_lineas - 1:
+                break
+    if actual:
+        lineas.append(actual)
+    lineas = lineas[:max_lineas]
+
+    # Si sobró texto sin usar, agregamos "…" a la última línea que entre
+    usado = " ".join(lineas)
+    if len(usado) < len(texto):
+        ultima = lineas[-1]
+        while draw.textbbox((0, 0), ultima + "…", font=font)[2] > max_width_px and len(ultima) > 1:
+            ultima = ultima[:-1]
+        lineas[-1] = ultima.rstrip() + "…"
+    return lineas
+
+
+def generar_etiqueta(descripcion, color, talle, codigo, dpi=300):
+    """Genera la etiqueta de 4cm x 2cm como imagen PNG (devuelve BytesIO)."""
+    px_mm = dpi / 25.4
+    ancho_mm, alto_mm = 40.0, 20.0
+    W = round(ancho_mm * px_mm)
+    H = round(alto_mm * px_mm)
+
+    img = Image.new("L", (W, H), color=255)
+    draw = ImageDraw.Draw(img)
+
+    margen = round(1.3 * px_mm)
+    col_izq_ancho = round(21.5 * px_mm)
+
+    font_desc = ImageFont.truetype(FONT_REGULAR, size=round(2.3 * px_mm))
+    font_color = ImageFont.truetype(FONT_REGULAR, size=round(2.6 * px_mm))
+    font_talle = ImageFont.truetype(FONT_BOLD, size=round(4.6 * px_mm))
+    font_digitos = ImageFont.truetype(FONT_REGULAR, size=round(2.0 * px_mm))
+
+    y = margen
+    max_w = col_izq_ancho - margen
+
+    for linea in _texto_ajustado(draw, str(descripcion).upper(), font_desc, max_w, max_lineas=2):
+        draw.text((margen, y), linea, font=font_desc, fill=0)
+        y += draw.textbbox((0, 0), linea, font=font_desc)[3] + round(0.6 * px_mm)
+
+    y += round(0.8 * px_mm)
+    draw.text((margen, y), str(color).upper(), font=font_color, fill=0)
+    y += draw.textbbox((0, 0), str(color).upper(), font=font_color)[3] + round(1.0 * px_mm)
+
+    draw.text((margen, y), str(talle).upper(), font=font_talle, fill=0)
+
+    # --- Barcode a la derecha ---
+    codigo_str = str(codigo).strip()
+    col_der_x = margen + col_izq_ancho + round(1.0 * px_mm)
+    col_der_ancho = W - col_der_x - margen
+
+    bc_img = _generar_imagen_codigo_barra(codigo_str)
+    escala = col_der_ancho / bc_img.width
+    bc_alto = min(round(bc_img.height * escala), round(13 * px_mm))
+    bc_img = bc_img.resize((col_der_ancho, bc_alto))
+
+    bc_y = margen
+    img.paste(bc_img, (col_der_x, bc_y))
+
+    digitos_y = bc_y + bc_alto + round(0.5 * px_mm)
+    bbox = draw.textbbox((0, 0), codigo_str, font=font_digitos)
+    digitos_x = col_der_x + max(0, (col_der_ancho - (bbox[2] - bbox[0])) // 2)
+    draw.text((digitos_x, digitos_y), codigo_str, font=font_digitos, fill=0)
+
+    salida = io.BytesIO()
+    img.save(salida, format="PNG", dpi=(dpi, dpi))
+    salida.seek(0)
+    return salida
+
+
+@app.route("/etiqueta", methods=["GET"])
+def etiqueta():
+    return render_template("etiqueta.html")
+
+
+@app.route("/etiqueta/generar", methods=["GET", "POST"])
+def etiqueta_generar():
+    datos = request.values
+    descripcion = (datos.get("descripcion") or "").strip()
+    color = (datos.get("color") or "").strip()
+    talle = (datos.get("talle") or "").strip()
+    codigo = (datos.get("codigo") or "").strip()
+
+    if not codigo:
+        flash("El código de barra es obligatorio para generar la etiqueta.")
+        return redirect(url_for("etiqueta"))
+
+    try:
+        imagen = generar_etiqueta(descripcion, color, talle, codigo)
+    except Exception as e:
+        flash(f"No pude generar la etiqueta: {e}")
+        return redirect(url_for("etiqueta"))
+
+    descargar = datos.get("descargar") == "1"
+    nombre = f"etiqueta_{secure_filename(codigo)}.png"
+    return send_file(
+        imagen,
+        mimetype="image/png",
+        as_attachment=descargar,
+        download_name=nombre,
+    )
 
 
 @app.route("/", methods=["GET"])

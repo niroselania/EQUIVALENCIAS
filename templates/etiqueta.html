@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generar Etiqueta</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --border: #2a2e38;
+      --text: #e8eaed;
+      --muted: #9aa1ac;
+      --accent: #5b8cff;
+      --accent-hover: #4a76e0;
+      --warn: #e0a13e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 40px 16px;
+    }
+    .wrap { width: 100%; max-width: 640px; }
+    h1 { font-size: 1.5rem; margin-bottom: 4px; }
+    p.sub { color: var(--muted); margin-top: 0; margin-bottom: 28px; }
+    a.back { color: var(--muted); font-size: 0.85rem; text-decoration: none; }
+    a.back:hover { color: var(--text); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; margin-top: 14px; }
+    label:first-child { margin-top: 0; }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      background: #0f1115;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    .flash {
+      background: #3a2020;
+      border: 1px solid #7a3a3a;
+      color: #ffb4b4;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+    }
+    .botones { display: flex; gap: 10px; margin-top: 20px; }
+    button, a.btn {
+      flex: 1;
+      padding: 13px;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      display: block;
+    }
+    button:hover, a.btn:hover { background: var(--accent-hover); }
+    a.btn.secondary { background: #2a2e38; }
+    a.btn.secondary:hover { background: #363b47; }
+    .preview {
+      margin-top: 20px;
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 90px;
+    }
+    .preview img { image-rendering: pixelated; max-width: 100%; }
+    .footer-note {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-align: center;
+      margin-top: 24px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" href="/">← Volver</a>
+    <h1>Generar Etiqueta (4 x 2 cm)</h1>
+    <p class="sub">Completá los datos y descargá la etiqueta lista para imprimir.</p>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for m in messages %}
+          <div class="flash">{{ m }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      <form id="form-etiqueta">
+        <label for="descripcion">Descripción de la prenda</label>
+        <input type="text" id="descripcion" name="descripcion" placeholder="W'S MICRO PUFF HOODY">
+
+        <label for="color">Color</label>
+        <input type="text" id="color" name="color" placeholder="LAGOM BLUE">
+
+        <label for="talle">Talle</label>
+        <input type="text" id="talle" name="talle" placeholder="S">
+
+        <label for="codigo">Código de barra</label>
+        <input type="text" id="codigo" name="codigo" placeholder="195699947641" required>
+
+        <div class="botones">
+          <button type="button" onclick="previsualizar()">Previsualizar</button>
+          <a class="btn secondary" id="link-descargar" href="#" onclick="return descargar()">Descargar PNG</a>
+        </div>
+      </form>
+
+      <div class="preview" id="preview" style="display:none;">
+        <img id="preview-img" alt="Vista previa de la etiqueta">
+      </div>
+    </div>
+
+    <div class="footer-note">
+      La imagen se genera a 300 DPI con el tamaño físico exacto de 4 x 2 cm (queda guardado en
+      los metadatos del PNG), así que al imprimirla a "tamaño real" / 100% sale del tamaño correcto.
+    </div>
+  </div>
+
+  <script>
+    function armarUrl() {
+      const params = new URLSearchParams({
+        descripcion: document.getElementById('descripcion').value,
+        color: document.getElementById('color').value,
+        talle: document.getElementById('talle').value,
+        codigo: document.getElementById('codigo').value,
+      });
+      return '/etiqueta/generar?' + params.toString();
+    }
+
+    function previsualizar() {
+      const codigo = document.getElementById('codigo').value.trim();
+      if (!codigo) { alert('Ingresá el código de barra.'); return; }
+      const url = armarUrl() + '&t=' + Date.now();
+      document.getElementById('preview-img').src = url;
+      document.getElementById('preview').style.display = 'flex';
+    }
+
+    function descargar() {
+      const codigo = document.getElementById('codigo').value.trim();
+      if (!codigo) { alert('Ingresá el código de barra.'); return false; }
+      window.location.href = armarUrl() + '&descargar=1';
+      return false;
+    }
+  </script>
+</body>
+</html>
