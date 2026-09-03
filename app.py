@@ -35,7 +35,7 @@ def _ext(filename):
 
 def _read_grande(path):
     """Lee la planilla grande (Equivalencia) sea .xls viejo (Crystal Reports) o .xlsx.
-    Devuelve un dict: 'SKU COLOR' -> lista de (codigo_barra, talle)
+    Devuelve un dict: 'SKU COLOR' -> lista de (codigo_barra, talle, descripcion)
     """
     ext = _ext(path)
     engine = "xlrd" if ext == ".xls" else "openpyxl"
@@ -52,16 +52,42 @@ def _read_grande(path):
         for _, row in df.iterrows():
             codigo = row.get(0)
             articulo = row.get(1)
+            descripcion = row.get(2)
             talle = row.get(5) if len(row) > 5 else None
             if pd.isna(codigo) or pd.isna(articulo):
                 continue
             codigo = str(codigo).strip()
             articulo = str(articulo).strip()
+            descripcion = "" if pd.isna(descripcion) else str(descripcion).strip()
             talle = "" if pd.isna(talle) else str(talle).strip()
             if not codigo or not articulo:
                 continue
-            lookup[articulo].append((codigo, talle))
+            lookup[articulo].append((codigo, talle, descripcion))
     return lookup
+
+
+_LOOKUP_CACHE = {"path": None, "mtime": None, "lookup": None}
+
+
+def _get_lookup(path):
+    """Cachea en memoria el resultado de _read_grande mientras no cambie el archivo,
+    para no re-parsear ~300k filas en cada pedido o cada etiqueta."""
+    global _LOOKUP_CACHE
+    mtime = os.path.getmtime(path)
+    if _LOOKUP_CACHE["path"] == path and _LOOKUP_CACHE["mtime"] == mtime:
+        return _LOOKUP_CACHE["lookup"]
+    lookup = _read_grande(path)
+    _LOOKUP_CACHE = {"path": path, "mtime": mtime, "lookup": lookup}
+    return lookup
+
+
+def _resolver_grande_cache():
+    """Devuelve el path de la planilla grande cacheada en disco, o None si no hay ninguna."""
+    if os.path.exists(GRANDE_CACHE_PATH_XLS):
+        return GRANDE_CACHE_PATH_XLS
+    if os.path.exists(GRANDE_CACHE_PATH_XLSX):
+        return GRANDE_CACHE_PATH_XLSX
+    return None
 
 
 def _dedupe_codigos(codigos):
@@ -92,7 +118,7 @@ def _buscar_codigo(lookup, sku, color, talle):
     key = f"{sku_str} {color_str}"
     candidatos = lookup.get(key, [])
     coincidencias = [
-        codigo for codigo, t in candidatos if t.strip().upper() == talle_str.upper()
+        codigo for codigo, t, _desc in candidatos if t.strip().upper() == talle_str.upper()
     ]
     coincidencias = _dedupe_codigos(coincidencias)
 
@@ -103,6 +129,33 @@ def _buscar_codigo(lookup, sku, color, talle):
     # Conflicto real de datos en la planilla grande: mismo SKU+Color+Talle con más
     # de un código de barra distinto. Se muestran todos para que se revise a mano.
     return " / ".join(coincidencias)
+
+
+def _buscar_producto(lookup, sku, color, talle):
+    """Busca código de barra + descripción exactos para SKU + Color + Talle.
+    Devuelve (codigo, descripcion) o (None, None) si no hay coincidencia."""
+    if not sku or not color:
+        return None, None
+    sku_str = str(sku).strip()
+    if sku_str.endswith(".0"):
+        sku_str = sku_str[:-2]
+    color_str = str(color).strip()
+    talle_str = "" if talle is None else str(talle).strip()
+
+    key = f"{sku_str} {color_str}"
+    candidatos = lookup.get(key, [])
+    coincidencias = [
+        (codigo, desc) for codigo, t, desc in candidatos if t.strip().upper() == talle_str.upper()
+    ]
+    if not coincidencias:
+        return None, None
+
+    codigos_dedup = _dedupe_codigos([c for c, _d in coincidencias])
+    descripcion = coincidencias[0][1]
+    # Para la etiqueta necesitamos un único código escaneable: si hay un conflicto real
+    # de datos (mismo SKU+Color+Talle con más de un código), usamos el primero.
+    codigo = codigos_dedup[0]
+    return codigo, descripcion
 
 
 def _buscar_columna(headers, *nombres_posibles):
@@ -117,7 +170,7 @@ def _procesar(grande_path, pedido_path):
     completa la columna EQUIVALENCIA que ya viene en la planilla, buscando el
     código de barra exacto por SKU + Color + Talle. No inserta columnas nuevas ni
     toca el resto de la planilla."""
-    lookup = _read_grande(grande_path)
+    lookup = _get_lookup(grande_path)
 
     wb = openpyxl.load_workbook(pedido_path)
     ws = wb.worksheets[0]
@@ -282,19 +335,35 @@ def generar_etiqueta(descripcion, color, talle, codigo, dpi=300):
 
 @app.route("/etiqueta", methods=["GET"])
 def etiqueta():
-    return render_template("etiqueta.html")
+    grande_cached = _resolver_grande_cache() is not None
+    return render_template("etiqueta.html", grande_cached=grande_cached)
 
 
 @app.route("/etiqueta/generar", methods=["GET", "POST"])
 def etiqueta_generar():
     datos = request.values
-    descripcion = (datos.get("descripcion") or "").strip()
+    sku = (datos.get("sku") or "").strip()
     color = (datos.get("color") or "").strip()
     talle = (datos.get("talle") or "").strip()
-    codigo = (datos.get("codigo") or "").strip()
+
+    if not sku or not color or not talle:
+        flash("Completá SKU, Color y Talle.")
+        return redirect(url_for("etiqueta"))
+
+    grande_path = _resolver_grande_cache()
+    if not grande_path:
+        flash("No hay planilla grande cargada todavía. Subila primero desde la página principal.")
+        return redirect(url_for("etiqueta"))
+
+    try:
+        lookup = _get_lookup(grande_path)
+        codigo, descripcion = _buscar_producto(lookup, sku, color, talle)
+    except Exception as e:
+        flash(f"Error buscando el producto: {e}")
+        return redirect(url_for("etiqueta"))
 
     if not codigo:
-        flash("El código de barra es obligatorio para generar la etiqueta.")
+        flash(f"No encontré ningún producto con SKU {sku}, Color {color} y Talle {talle} en la planilla grande.")
         return redirect(url_for("etiqueta"))
 
     try:

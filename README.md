@@ -29,11 +29,14 @@ para cada línea del pedido, el/los código(s) de barra correspondientes.
 ## Generar etiqueta suelta (reimpresión)
 
 Desde el botón "Generar etiqueta" en la página principal (o entrando directo a `/etiqueta`)
-podés crear una etiqueta individual de **4 x 2 cm** ingresando a mano: descripción, color,
-talle y código de barra. Genera un PNG a 300 DPI con el tamaño físico exacto de la etiqueta
-(queda en los metadatos del archivo), con el código de barra real generado a partir del
-número (EAN-13, UPC-A o Code128 según el largo del código). Al imprimir el PNG a "tamaño
-real" / 100% (sin ajustar a página) sale del tamaño correcto.
+podés crear una etiqueta individual de **4 x 2 cm** ingresando solo **SKU, Color y Talle**.
+La descripción de la prenda y el código de barra se buscan solos por coincidencia exacta
+contra la planilla grande cargada (la misma que usa el procesamiento de pedidos). Genera un
+PNG a 300 DPI con el tamaño físico exacto de la etiqueta (queda en los metadatos del
+archivo), con el código de barra real generado a partir del número encontrado (EAN-13,
+UPC-A o Code128 según el largo del código). Al imprimir el PNG a "tamaño real" / 100% (sin
+ajustar a página) sale del tamaño correcto. Necesita tener una planilla grande cargada
+previamente desde la página principal.
 
 ## Deploy en Portainer (Docker Compose)
 

@@ -99,7 +99,7 @@
   <div class="wrap">
     <a class="back" href="/">← Volver</a>
     <h1>Generar Etiqueta (4 x 2 cm)</h1>
-    <p class="sub">Completá los datos y descargá la etiqueta lista para imprimir.</p>
+    <p class="sub">Ingresá SKU, Color y Talle — la descripción y el código de barra se buscan solos en la planilla grande.</p>
 
     {% with messages = get_flashed_messages() %}
       {% if messages %}
@@ -109,19 +109,20 @@
       {% endif %}
     {% endwith %}
 
+    {% if not grande_cached %}
+      <div class="flash">Todavía no hay una planilla grande cargada. Subila primero desde la página principal.</div>
+    {% endif %}
+
     <div class="card">
       <form id="form-etiqueta">
-        <label for="descripcion">Descripción de la prenda</label>
-        <input type="text" id="descripcion" name="descripcion" placeholder="W'S MICRO PUFF HOODY">
+        <label for="sku">SKU</label>
+        <input type="text" id="sku" name="sku" placeholder="84041" required>
 
         <label for="color">Color</label>
-        <input type="text" id="color" name="color" placeholder="LAGOM BLUE">
+        <input type="text" id="color" name="color" placeholder="LMBE" required>
 
         <label for="talle">Talle</label>
-        <input type="text" id="talle" name="talle" placeholder="S">
-
-        <label for="codigo">Código de barra</label>
-        <input type="text" id="codigo" name="codigo" placeholder="195699947641" required>
+        <input type="text" id="talle" name="talle" placeholder="S" required>
 
         <div class="botones">
           <button type="button" onclick="previsualizar()">Previsualizar</button>
@@ -135,33 +136,40 @@
     </div>
 
     <div class="footer-note">
-      La imagen se genera a 300 DPI con el tamaño físico exacto de 4 x 2 cm (queda guardado en
-      los metadatos del PNG), así que al imprimirla a "tamaño real" / 100% sale del tamaño correcto.
+      La descripción y el código de barra se buscan por coincidencia exacta de SKU + Color +
+      Talle contra la planilla grande cargada. La imagen se genera a 300 DPI con el tamaño
+      físico exacto de 4 x 2 cm (queda guardado en los metadatos del PNG), así que al
+      imprimirla a "tamaño real" / 100% sale del tamaño correcto.
     </div>
   </div>
 
   <script>
     function armarUrl() {
       const params = new URLSearchParams({
-        descripcion: document.getElementById('descripcion').value,
+        sku: document.getElementById('sku').value,
         color: document.getElementById('color').value,
         talle: document.getElementById('talle').value,
-        codigo: document.getElementById('codigo').value,
       });
       return '/etiqueta/generar?' + params.toString();
     }
 
+    function camposCompletos() {
+      const sku = document.getElementById('sku').value.trim();
+      const color = document.getElementById('color').value.trim();
+      const talle = document.getElementById('talle').value.trim();
+      if (!sku || !color || !talle) { alert('Completá SKU, Color y Talle.'); return false; }
+      return true;
+    }
+
     function previsualizar() {
-      const codigo = document.getElementById('codigo').value.trim();
-      if (!codigo) { alert('Ingresá el código de barra.'); return; }
+      if (!camposCompletos()) return;
       const url = armarUrl() + '&t=' + Date.now();
       document.getElementById('preview-img').src = url;
       document.getElementById('preview').style.display = 'flex';
     }
 
     function descargar() {
-      const codigo = document.getElementById('codigo').value.trim();
-      if (!codigo) { alert('Ingresá el código de barra.'); return false; }
+      if (!camposCompletos()) return false;
       window.location.href = armarUrl() + '&descargar=1';
       return false;
     }
