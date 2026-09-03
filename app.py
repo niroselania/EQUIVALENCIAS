@@ -278,7 +278,7 @@ def _texto_ajustado(draw, texto, font, max_width_px, max_lineas=2):
     return lineas
 
 
-def generar_etiqueta(descripcion, color, talle, codigo, dpi=300):
+def generar_etiqueta(descripcion, color, talle, codigo, sku="", dpi=300):
     """Genera la etiqueta de 4cm x 2cm como imagen PNG (devuelve BytesIO)."""
     px_mm = dpi / 25.4
     ancho_mm, alto_mm = 40.0, 20.0
@@ -294,6 +294,7 @@ def generar_etiqueta(descripcion, color, talle, codigo, dpi=300):
     font_desc = ImageFont.truetype(FONT_REGULAR, size=round(2.3 * px_mm))
     font_color = ImageFont.truetype(FONT_REGULAR, size=round(2.6 * px_mm))
     font_talle = ImageFont.truetype(FONT_BOLD, size=round(4.6 * px_mm))
+    font_sku = ImageFont.truetype(FONT_REGULAR, size=round(2.2 * px_mm))
     font_digitos = ImageFont.truetype(FONT_REGULAR, size=round(2.0 * px_mm))
 
     y = margen
@@ -308,6 +309,10 @@ def generar_etiqueta(descripcion, color, talle, codigo, dpi=300):
     y += draw.textbbox((0, 0), str(color).upper(), font=font_color)[3] + round(1.0 * px_mm)
 
     draw.text((margen, y), str(talle).upper(), font=font_talle, fill=0)
+    y += draw.textbbox((0, 0), str(talle).upper(), font=font_talle)[3] + round(0.8 * px_mm)
+
+    if sku:
+        draw.text((margen, y), str(sku).strip(), font=font_sku, fill=0)
 
     # --- Barcode a la derecha ---
     codigo_str = str(codigo).strip()
@@ -367,7 +372,7 @@ def etiqueta_generar():
         return redirect(url_for("etiqueta"))
 
     try:
-        imagen = generar_etiqueta(descripcion, color, talle, codigo)
+        imagen = generar_etiqueta(descripcion, color, talle, codigo, sku=sku)
     except Exception as e:
         flash(f"No pude generar la etiqueta: {e}")
         return redirect(url_for("etiqueta"))
