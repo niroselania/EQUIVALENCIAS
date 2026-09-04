@@ -91,7 +91,7 @@
 <body>
   <div class="wrap">
     <h1>Equivalencia de Códigos de Barra</h1>
-    <p class="sub">Cruza SKU + Color de tu pedido contra la planilla de equivalencia y te devuelve los códigos de barra correspondientes.</p>
+    <p class="sub">Completa EQUIVALENCIA con el código de barra de cada prenda, cruzando SKU + Color + Talle contra la planilla de equivalencias.</p>
 
     {% with messages = get_flashed_messages() %}
       {% if messages %}
@@ -104,7 +104,7 @@
     <form action="/procesar" method="post" enctype="multipart/form-data">
       <div class="card">
         <h2>1. Planilla grande (Equivalencia)</h2>
-        <div class="desc">El export con todos los productos y sus códigos de barra. Podés omitir este paso si ya subiste una antes: se reutiliza la última cargada.</div>
+        <div class="desc">El export con todos los productos y su columna CODIGOS. Podés omitir este paso si ya subiste una antes: se reutiliza la última cargada.</div>
         <label for="grande">Archivo .xls / .xlsx</label>
         <input type="file" id="grande" name="grande" accept=".xls,.xlsx">
         {% if grande_cached %}
@@ -115,8 +115,8 @@
       </div>
 
       <div class="card">
-        <h2>2. Planilla de pedido</h2>
-        <div class="desc">La planilla del proveedor a resolver (columna A = SKU, columna B = Color).</div>
+        <h2>2. Planilla de stock</h2>
+        <div class="desc">La planilla de stock a completar: usa SKU, COLOR y TALLE (columnas C, D y E en tu archivo).</div>
         <label for="pedido">Archivo .xlsx (debe tener columnas EQUIVALENCIA, SKU, COLOR y TALLE)</label>
         <input type="file" id="pedido" name="pedido" accept=".xlsx" required>
       </div>
@@ -125,9 +125,8 @@
     </form>
 
     <div class="footer-note">
-      Busca por SKU + Color + Talle exacto y completa la columna "EQUIVALENCIA" que ya viene
-      en tu planilla (pisa lo que haya ahí, ej. las XXXXX) con el código de barra encontrado.
-      El resto de la planilla queda intacta.
+      Busca por SKU + Color + Talle exacto y completa la primera columna "EQUIVALENCIA"
+      con el valor de CODIGOS de la planilla de equivalencias. El resto de la planilla queda intacta.
     </div>
 
     <div class="card" style="text-align:center;">

@@ -34,8 +34,11 @@ def _ext(filename):
 
 
 def _read_grande(path):
-    """Lee la planilla grande (Equivalencia) sea .xls viejo (Crystal Reports) o .xlsx.
-    Devuelve un dict: 'SKU COLOR' -> lista de (codigo_barra, talle, descripcion)
+    """Lee la planilla de equivalencias y arma un índice SKU + COLOR + TALLE.
+
+    Acepta tanto el export anterior (Código, Artículo, Descripción, ..., Talle)
+    como el nuevo, cuya columna de barras se llama CODIGOS.  El dato ``Artículo``
+    del export anterior contiene ``SKU COLOR`` en una sola celda.
     """
     ext = _ext(path)
     engine = "xlrd" if ext == ".xls" else "openpyxl"
@@ -46,14 +49,35 @@ def _read_grande(path):
         df = xl.parse(sheet, header=None, dtype=str)
         if df.empty:
             continue
-        # La primera hoja trae una fila de encabezado ("Código", "Artículo", ...)
-        if str(df.iloc[0, 0]).strip() == "Código":
+        encabezados = {
+            str(valor).strip().upper().replace("Ó", "O"): columna
+            for columna, valor in enumerate(df.iloc[0])
+            if not pd.isna(valor) and str(valor).strip()
+        }
+        col_codigo = _buscar_columna(encabezados, "CODIGO", "CODIGOS", "CODIGO DE BARRA")
+        col_articulo = _buscar_columna(encabezados, "ARTICULO", "SKU COLOR", "CONCAT")
+        col_sku = _buscar_columna(encabezados, "SKU")
+        col_color = _buscar_columna(encabezados, "COLOR")
+        col_talle = _buscar_columna(encabezados, "TALLE")
+        col_descripcion = _buscar_columna(encabezados, "DESCRIPCION", "NOMBRE", "PRODUCTO")
+
+        # Compatibilidad con el export histórico: no siempre trae los mismos títulos.
+        tiene_encabezados = col_codigo is not None and (col_articulo is not None or (col_sku is not None and col_color is not None))
+        if tiene_encabezados:
             df = df.iloc[1:]
+        else:
+            col_codigo, col_articulo, col_sku, col_color = 0, 1, None, None
+            col_descripcion, col_talle = 2, 5
         for _, row in df.iterrows():
-            codigo = row.get(0)
-            articulo = row.get(1)
-            descripcion = row.get(2)
-            talle = row.get(5) if len(row) > 5 else None
+            codigo = row.get(col_codigo)
+            descripcion = row.get(col_descripcion) if col_descripcion is not None else None
+            talle = row.get(col_talle) if col_talle is not None else None
+            if col_articulo is not None:
+                articulo = row.get(col_articulo)
+            else:
+                sku = row.get(col_sku)
+                color = row.get(col_color)
+                articulo = None if pd.isna(sku) or pd.isna(color) else f"{sku} {color}"
             if pd.isna(codigo) or pd.isna(articulo):
                 continue
             codigo = str(codigo).strip()
@@ -166,52 +190,44 @@ def _buscar_columna(headers, *nombres_posibles):
 
 
 def _procesar(grande_path, pedido_path):
-    """Abre el excel de pedido tal cual fue subido (mismo formato, mismo estilo) y
-    completa la columna EQUIVALENCIA que ya viene en la planilla, buscando el
-    código de barra exacto por SKU + Color + Talle. No inserta columnas nuevas ni
-    toca el resto de la planilla."""
+    """Completa EQUIVALENCIA usando SKU, COLOR y TALLE de la planilla de stock.
+
+    Se preservan formato, fórmulas y todas las demás columnas. Si el archivo tiene
+    varias hojas con esos encabezados, se completan todas.
+    """
     lookup = _get_lookup(grande_path)
 
     wb = openpyxl.load_workbook(pedido_path)
-    ws = wb.worksheets[0]
+    hojas_procesadas = 0
+    for ws in wb.worksheets:
+        headers = {}
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(row=1, column=c).value
+            if v is not None:
+                headers[str(v).strip().upper()] = c
 
-    headers = {}
-    for c in range(1, ws.max_column + 1):
-        v = ws.cell(row=1, column=c).value
-        if v is not None:
-            headers[str(v).strip().upper()] = c
-
-    col_equiv = _buscar_columna(headers, "EQUIVALENCIA")
-    col_sku = _buscar_columna(headers, "SKU")
-    col_color = _buscar_columna(headers, "COLOR")
-    col_talle = _buscar_columna(headers, "TALLE")
-
-    faltantes = [
-        nombre
-        for nombre, col in [
-            ("EQUIVALENCIA", col_equiv),
-            ("SKU", col_sku),
-            ("COLOR", col_color),
-            ("TALLE", col_talle),
-        ]
-        if col is None
-    ]
-    if faltantes:
-        raise ValueError(
-            "No encontré la columna "
-            + ", ".join(faltantes)
-            + " en la fila 1 de la planilla. Los encabezados deben llamarse exactamente así."
-        )
-
-    for row in range(2, ws.max_row + 1):
-        sku = ws.cell(row=row, column=col_sku).value
-        color = ws.cell(row=row, column=col_color).value
-        talle = ws.cell(row=row, column=col_talle).value
-        if sku is None and color is None:
+        col_equiv = _buscar_columna(headers, "EQUIVALENCIA")
+        col_sku = _buscar_columna(headers, "SKU")
+        col_color = _buscar_columna(headers, "COLOR")
+        col_talle = _buscar_columna(headers, "TALLE")
+        if not all((col_equiv, col_sku, col_color, col_talle)):
             continue
-        resultado = _buscar_codigo(lookup, sku, color, talle)
-        cell = ws.cell(row=row, column=col_equiv, value=resultado)
-        cell.number_format = "@"  # texto plano, para no perder ceros a la izquierda
+
+        hojas_procesadas += 1
+        for row in range(2, ws.max_row + 1):
+            sku = ws.cell(row=row, column=col_sku).value
+            color = ws.cell(row=row, column=col_color).value
+            talle = ws.cell(row=row, column=col_talle).value
+            if sku is None and color is None:
+                continue
+            resultado = _buscar_codigo(lookup, sku, color, talle)
+            cell = ws.cell(row=row, column=col_equiv, value=resultado)
+            cell.number_format = "@"  # texto plano, para no perder ceros a la izquierda
+
+    if not hojas_procesadas:
+        raise ValueError(
+            "No encontré una hoja con las columnas EQUIVALENCIA, SKU, COLOR y TALLE en la fila 1."
+        )
 
     output = io.BytesIO()
     wb.save(output)
@@ -458,4 +474,3 @@ def health():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-
