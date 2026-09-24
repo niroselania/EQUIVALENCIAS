@@ -138,11 +138,28 @@
   </div>
 
   <script>
-    document.getElementById('barcode').addEventListener('keydown', (event) => {
+    const barcodeField = document.getElementById('barcode');
+    let scanStartedAt = 0;
+    let scanTimer;
+
+    barcodeField.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault();
         previsualizar();
       }
+    });
+
+    barcodeField.addEventListener('input', () => {
+      if (barcodeField.value.length === 1) scanStartedAt = Date.now();
+      clearTimeout(scanTimer);
+      scanTimer = setTimeout(() => {
+        const wasScanner = Date.now() - scanStartedAt < 700;
+        if (wasScanner && barcodeField.value.trim().length >= 8) previsualizar();
+      }, 350);
+    });
+
+    barcodeField.addEventListener('change', () => {
+      if (barcodeField.value.trim().length >= 8) previsualizar();
     });
 
     function armarUrl() {
