@@ -40,12 +40,160 @@ def _encabezado(valor):
 
 
 def _texto(valor):
-    if valor is None:
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
         return ""
+    try:
+        if pd.isna(valor):
+            return ""
+    except (TypeError, ValueError):
+        pass
     if isinstance(valor, float) and valor.is_integer():
         return str(int(valor))
     texto = str(valor).strip()
+    if texto.lower() in {"nan", "none", "nat", "<na>", "#n/a", "#na"}:
+        return ""
     return texto[:-2] if texto.endswith(".0") else texto
+
+
+_TALLES = {
+    "XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "XXXXL",
+    "2XL", "3XL", "4XL", "OS", "OSFA", "ALL", "UNICO", "UNICA", "U",
+    "SM", "MD", "LG", "2XS", "3XS",
+}
+for _n in range(0, 55):
+    _TALLES.add(str(_n))
+
+
+def _parece_talle(valor):
+    texto = _texto(valor).upper().replace(" ", "")
+    if not texto or len(texto) > 6:
+        return False
+    return texto in _TALLES
+
+
+def _parece_codigo(valor):
+    texto = _texto(valor).replace(" ", "")
+    return texto.isdigit() and len(texto) >= 8
+
+
+def _partir_articulo(valor):
+    texto = _texto(valor)
+    if not texto:
+        return "", ""
+    partes = texto.split(maxsplit=1)
+    if len(partes) != 2:
+        return "", ""
+    sku, color = partes[0], partes[1]
+    if len(color) > 12 or " " in color.strip():
+        return "", ""
+    return sku, color
+
+
+def _celdas(row):
+    valores = []
+    if hasattr(row, "tolist"):
+        valores = list(row.tolist())
+    else:
+        valores = [row.get(i) for i in range(len(row))]
+    return valores
+
+
+def _detectar_columnas(df):
+    encabezados = {
+        _encabezado(valor): columna
+        for columna, valor in enumerate(df.iloc[0])
+        if not pd.isna(valor) and str(valor).strip()
+    }
+    col_codigo = _buscar_columna(
+        encabezados, "CODIGO", "CODIGOS", "CODIGO DE BARRA", "CODIGOS DE BARRA", "BARRA", "BARRAS", "BARCODE"
+    )
+    col_articulo = _buscar_columna(encabezados, "ARTICULO", "ARTICULOS", "ARTIC", "SKU COLOR", "CONCAT")
+    col_sku = _buscar_columna(encabezados, "SKU")
+    col_color = _buscar_columna(encabezados, "COLOR")
+    cols_talle = [columna for nombre, columna in encabezados.items() if "TALLE" in nombre or nombre in {"TAL", "SIZE"}]
+    col_talle = cols_talle[0] if cols_talle else _buscar_columna(encabezados, "TALLE")
+    col_descripcion = _buscar_columna(encabezados, "DESCRIPCION", "NOMBRE", "PRODUCTO")
+    tiene_encabezados = col_codigo is not None and (
+        col_articulo is not None or (col_sku is not None and col_color is not None)
+    )
+    if tiene_encabezados:
+        return {
+            "skip_header": True,
+            "codigo": col_codigo,
+            "articulo": col_articulo,
+            "sku": col_sku,
+            "color": col_color,
+            "talle": col_talle,
+            "descripcion": col_descripcion,
+        }
+
+    muestra = df.head(80)
+    votos_codigo = defaultdict(int)
+    votos_articulo = defaultdict(int)
+    votos_talle = defaultdict(int)
+    votos_desc = defaultdict(int)
+    for _, row in muestra.iterrows():
+        celdas = _celdas(row)
+        for i, valor in enumerate(celdas):
+            if _parece_codigo(valor):
+                votos_codigo[i] += 1
+            sku, color = _partir_articulo(valor)
+            if sku and color:
+                votos_articulo[i] += 1
+            if _parece_talle(valor):
+                votos_talle[i] += 1
+            texto = _texto(valor)
+            if texto and not _parece_codigo(valor) and not _parece_talle(valor) and not _partir_articulo(valor)[0]:
+                if len(texto) >= 8:
+                    votos_desc[i] += 1
+
+    col_codigo = max(votos_codigo, key=votos_codigo.get) if votos_codigo else 0
+    col_articulo = max(votos_articulo, key=votos_articulo.get) if votos_articulo else 1
+    col_talle = max(votos_talle, key=votos_talle.get) if votos_talle else None
+    col_descripcion = max(votos_desc, key=votos_desc.get) if votos_desc else None
+    return {
+        "skip_header": False,
+        "codigo": col_codigo,
+        "articulo": col_articulo,
+        "sku": None,
+        "color": None,
+        "talle": col_talle,
+        "descripcion": col_descripcion,
+    }
+
+
+def _talle_en_fila(row, col_talle):
+    if col_talle is not None:
+        talle = _texto(row.get(col_talle) if hasattr(row, "get") else row.iloc[col_talle] if col_talle < len(row) else "")
+        if _parece_talle(talle):
+            return talle.upper()
+    celdas = _celdas(row)
+    encontrados = []
+    for i, valor in enumerate(celdas):
+        if i == col_talle:
+            continue
+        if _parece_talle(valor):
+            encontrados.append(_texto(valor).upper())
+    if not encontrados:
+        return ""
+    # En las solapas largas el talle suele estar a la derecha.
+    return encontrados[-1]
+
+
+def _sku_color_en_fila(row, cols):
+    sku = _texto(row.get(cols["sku"])) if cols["sku"] is not None else ""
+    color = _texto(row.get(cols["color"])) if cols["color"] is not None else ""
+    if sku and color:
+        return sku, color
+    if cols["articulo"] is not None:
+        sku, color = _partir_articulo(row.get(cols["articulo"]))
+        if sku and color:
+            return sku, color
+    for valor in _celdas(row):
+        sku, color = _partir_articulo(valor)
+        if sku and color:
+            return sku, color
+    return "", ""
 
 
 def _clave_sku(sku):
@@ -65,7 +213,7 @@ def _buscar_columna(headers, *nombres_posibles):
 
 
 def _read_grande(path):
-    """Lee equivalencias y arma índices por artículo, barra y SKU."""
+    """Lee equivalencias en todas las solapas, aunque el talle cambie de columna."""
     ext = _ext(path)
     engine = "xlrd" if ext == ".xls" else "openpyxl"
     xl = pd.ExcelFile(path, engine=engine)
@@ -77,48 +225,26 @@ def _read_grande(path):
         df = xl.parse(sheet, header=None, dtype=str)
         if df.empty:
             continue
-        encabezados = {
-            _encabezado(valor): columna
-            for columna, valor in enumerate(df.iloc[0])
-            if not pd.isna(valor) and str(valor).strip()
-        }
-        col_codigo = _buscar_columna(
-            encabezados, "CODIGO", "CODIGOS", "CODIGO DE BARRA", "CODIGOS DE BARRA", "BARRA", "BARRAS", "BARCODE"
-        )
-        col_articulo = _buscar_columna(encabezados, "ARTICULO", "ARTICULOS", "ARTIC", "SKU COLOR", "CONCAT")
-        col_sku = _buscar_columna(encabezados, "SKU")
-        col_color = _buscar_columna(encabezados, "COLOR")
-        col_talle = _buscar_columna(encabezados, "TALLE")
-        col_descripcion = _buscar_columna(encabezados, "DESCRIPCION", "NOMBRE", "PRODUCTO")
-
-        tiene_encabezados = col_codigo is not None and (
-            col_articulo is not None or (col_sku is not None and col_color is not None)
-        )
-        if tiene_encabezados:
+        cols = _detectar_columnas(df)
+        if cols["skip_header"]:
             df = df.iloc[1:]
-        else:
-            col_codigo, col_articulo, col_sku, col_color = 0, 1, None, None
-            col_descripcion, col_talle = 2, 5
 
         for _, row in df.iterrows():
-            codigo = row.get(col_codigo)
-            if pd.isna(codigo):
-                continue
-            codigo = _texto(codigo)
-            if not codigo:
+            codigo = _texto(row.get(cols["codigo"]))
+            if not _parece_codigo(codigo) and codigo:
+                # A veces el código está en otra columna de la misma fila.
+                codigo = next(( _texto(v) for v in _celdas(row) if _parece_codigo(v) ), "")
+            if not _parece_codigo(codigo):
                 continue
 
-            sku = _texto(row.get(col_sku)) if col_sku is not None else ""
-            color = _texto(row.get(col_color)) if col_color is not None else ""
-            if (not sku or not color) and col_articulo is not None and not pd.isna(row.get(col_articulo)):
-                partes = str(row.get(col_articulo)).strip().split(maxsplit=1)
-                if len(partes) == 2:
-                    sku, color = partes
+            sku, color = _sku_color_en_fila(row, cols)
             if not sku or not color:
                 continue
 
-            descripcion = _texto(row.get(col_descripcion)) if col_descripcion is not None else ""
-            talle = _texto(row.get(col_talle)) if col_talle is not None else ""
+            descripcion = _texto(row.get(cols["descripcion"])) if cols["descripcion"] is not None else ""
+            if descripcion.lower() in {"nan", "nam"} or _parece_talle(descripcion):
+                descripcion = ""
+            talle = _talle_en_fila(row, cols["talle"])
             articulo = f"{sku} {color}"
             lookup[articulo].append((codigo, talle, descripcion))
             producto = {
@@ -128,7 +254,10 @@ def _read_grande(path):
                 "talle": talle,
                 "descripcion": descripcion,
             }
-            barcode_index.setdefault(_clave_barra(codigo), producto)
+            clave = _clave_barra(codigo)
+            actual = barcode_index.get(clave)
+            if actual is None or (not _parece_talle(actual.get("talle")) and _parece_talle(talle)):
+                barcode_index[clave] = producto
             sku_index[_clave_sku(sku)].append(producto)
     return lookup, barcode_index, dict(sku_index)
 
