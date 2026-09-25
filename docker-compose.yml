@@ -9,7 +9,7 @@ services:
     container_name: equivalencia-app
     restart: unless-stopped
     ports:
-      - "8020:8000"
+      - "8021:8000"
     volumes:
       - equivalencia-data:/app/data
     healthcheck:
