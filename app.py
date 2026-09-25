@@ -313,6 +313,18 @@ def _texto_ajustado(draw, texto, font, max_width_px, max_lineas=2):
     return lineas
 
 
+def _es_talle_o_duplicado(descripcion, color, talle, sku):
+    texto = str(descripcion or "").strip().upper()
+    if not texto:
+        return True
+    if texto in {str(talle or "").strip().upper(), str(color or "").strip().upper(), str(sku or "").strip().upper()}:
+        return True
+    return texto in {
+        "XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "XXXXL",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "12", "14", "16",
+    }
+
+
 def generar_etiqueta(descripcion, color, talle, codigo, sku="", dpi=300):
     """Genera la etiqueta de 4cm x 2cm como imagen PNG (devuelve BytesIO)."""
     px_mm = dpi / 25.4
@@ -330,16 +342,16 @@ def generar_etiqueta(descripcion, color, talle, codigo, sku="", dpi=300):
     font_color = ImageFont.truetype(FONT_REGULAR, size=round(2.6 * px_mm))
     font_talle = ImageFont.truetype(FONT_BOLD, size=round(4.6 * px_mm))
     font_sku = ImageFont.truetype(FONT_REGULAR, size=round(2.2 * px_mm))
-    font_digitos = ImageFont.truetype(FONT_REGULAR, size=round(2.0 * px_mm))
 
     y = margen
     max_w = col_izq_ancho - margen
 
-    for linea in _texto_ajustado(draw, str(descripcion).upper(), font_desc, max_w, max_lineas=2):
-        draw.text((margen, y), linea, font=font_desc, fill=0)
-        y += draw.textbbox((0, 0), linea, font=font_desc)[3] + round(0.6 * px_mm)
+    if not _es_talle_o_duplicado(descripcion, color, talle, sku):
+        for linea in _texto_ajustado(draw, str(descripcion).upper(), font_desc, max_w, max_lineas=2):
+            draw.text((margen, y), linea, font=font_desc, fill=0)
+            y += draw.textbbox((0, 0), linea, font=font_desc)[3] + round(0.6 * px_mm)
+        y += round(0.8 * px_mm)
 
-    y += round(0.8 * px_mm)
     draw.text((margen, y), str(color).upper(), font=font_color, fill=0)
     y += draw.textbbox((0, 0), str(color).upper(), font=font_color)[3] + round(1.0 * px_mm)
 
@@ -350,19 +362,32 @@ def generar_etiqueta(descripcion, color, talle, codigo, sku="", dpi=300):
         draw.text((margen, y), str(sku).strip(), font=font_sku, fill=0)
 
     codigo_str = str(codigo).strip()
-    col_der_x = margen + col_izq_ancho + round(1.0 * px_mm)
+    col_der_x = margen + col_izq_ancho + round(0.6 * px_mm)
     col_der_ancho = W - col_der_x - margen
+    espacio_digitos = round(2.6 * px_mm)
+    hueco = round(0.35 * px_mm)
+    bc_alto_max = max(round(8 * px_mm), H - (2 * margen) - espacio_digitos - hueco)
 
-    bc_img = _generar_imagen_codigo_barra(codigo_str)
-    escala = col_der_ancho / bc_img.width
-    bc_alto = min(round(bc_img.height * escala), round(13 * px_mm))
-    bc_img = bc_img.resize((col_der_ancho, bc_alto))
+    bc_img = _generar_imagen_codigo_barra(codigo_str, module_height_mm=7.0, module_width_mm=0.22)
+    escala = min(col_der_ancho / bc_img.width, bc_alto_max / bc_img.height)
+    bc_w = max(1, round(bc_img.width * escala))
+    bc_alto = max(1, round(bc_img.height * escala))
+    bc_img = bc_img.resize((bc_w, bc_alto))
+    bc_x = col_der_x + max(0, (col_der_ancho - bc_w) // 2)
+    img.paste(bc_img, (bc_x, margen))
 
-    bc_y = margen
-    img.paste(bc_img, (col_der_x, bc_y))
+    font_digitos_size = round(1.7 * px_mm)
+    font_digitos = ImageFont.truetype(FONT_REGULAR, size=font_digitos_size)
+    while font_digitos_size > 8:
+        font_digitos = ImageFont.truetype(FONT_REGULAR, size=font_digitos_size)
+        ancho_txt = draw.textbbox((0, 0), codigo_str, font=font_digitos)[2]
+        if ancho_txt <= col_der_ancho:
+            break
+        font_digitos_size -= 1
 
-    digitos_y = bc_y + bc_alto + round(0.5 * px_mm)
     bbox = draw.textbbox((0, 0), codigo_str, font=font_digitos)
+    txt_h = bbox[3] - bbox[1]
+    digitos_y = min(margen + bc_alto + hueco, H - margen - txt_h)
     digitos_x = col_der_x + max(0, (col_der_ancho - (bbox[2] - bbox[0])) // 2)
     draw.text((digitos_x, digitos_y), codigo_str, font=font_digitos, fill=0)
 
