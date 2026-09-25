@@ -219,6 +219,17 @@ def _leer_meta(path):
         return f.read().strip()
 
 
+def _info_archivo(path, meta_path):
+    if path is None:
+        return None
+    info = _leer_meta(meta_path)
+    if info:
+        return info
+    nombre = os.path.basename(path)
+    when = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%d/%m/%Y %H:%M")
+    return f"{nombre} - cargada {when}"
+
+
 def _guardar_meta(path, filename):
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"{secure_filename(filename)} - cargada {datetime.now().strftime('%d/%m/%Y %H:%M')}")
@@ -496,6 +507,24 @@ def _resolver_producto(datos):
     return _producto_desde_stock(sku, color, talle, lookup, barcode_index, by_sku_grande, by_sku_stock)
 
 
+def _precargar_planillas():
+    grande = _resolver_grande_cache()
+    if grande:
+        try:
+            _get_lookup(grande)
+        except Exception:
+            pass
+    stock = _resolver_stock_cache()
+    if stock:
+        try:
+            _get_stock_index(stock)
+        except Exception:
+            pass
+
+
+_precargar_planillas()
+
+
 @app.route("/etiqueta")
 def etiqueta():
     return redirect(url_for("index"))
@@ -530,12 +559,14 @@ def etiqueta_generar():
 
 @app.route("/", methods=["GET"])
 def index():
+    grande_path = _resolver_grande_cache()
+    stock_path = _resolver_stock_cache()
     return render_template(
         "index.html",
-        grande_cached=_resolver_grande_cache() is not None,
-        grande_info=_leer_meta(GRANDE_CACHE_META),
-        stock_cached=_resolver_stock_cache() is not None,
-        stock_info=_leer_meta(STOCK_CACHE_META),
+        grande_cached=grande_path is not None,
+        grande_info=_info_archivo(grande_path, GRANDE_CACHE_META),
+        stock_cached=stock_path is not None,
+        stock_info=_info_archivo(stock_path, STOCK_CACHE_META),
     )
 
 
